@@ -6,7 +6,6 @@ use std::{
     process::Command,
 };
 
-pub const COSMIC_BACKEND: &str = "cosmic-wayland";
 pub const COSMIC_HELPER_BINARY: &str = "codex-computer-use-cosmic";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
