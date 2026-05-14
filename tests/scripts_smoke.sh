@@ -1083,7 +1083,7 @@ JS
 {"extensionId":"hehggadaopoacecdllhhajmbjkdcmajg","extensionHostName":"com.openai.codexextension"}
 JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
-import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");
+import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as KF}from"./node_modules/classic-level.mjs";import{resolve as Gf}from"path";import{tmpdir as YF}from"os";import{cp as ZF,mkdtemp as JF,rm as kS}from"fs/promises";import{existsSync as XF}from"fs";var IS=async(t,e)=>{let r=Gf(Tc,t,"Local Extension Settings",e);if(!XF(r))return null;let n=await JF(Gf(QF(),"codex"));await ZF(r,n,{recursive:!0}),await kS(Gf(n,"LOCK"));let o=new KF(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await kS(n,{force:!0,recursive:!0})}},QF=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:YF();var AS=async t=>{if(t.type!=="extension"||!t.metadata?.extensionInstanceId||!t.metadata.extensionId)return t;let e=await rO(t.metadata.extensionId,t.metadata.extensionInstanceId);return e?{...t,metadata:{...t.metadata,profileName:e.name,profileIsLastUsed:e.isLastUsed.toString(),profileOrdering:e.orderingIndex.toString()}}:t},rO=async(t,e)=>(await nO(t)).find(o=>o.instanceId===e)||null,nO=async t=>{let e=await oO();return await Promise.all(e.map(async r=>({...r,instanceId:await IS(r.id,t).catch(n=>(ee(n),null))})))},oO=async()=>{let t=tO(Tc,"Local State"),e=JSON.parse(await eO(t,"utf8"));return e.profile.profiles_order.map((r,n)=>{let o=e.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:e.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
 async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
 JS
     cat > "$chrome_dir/scripts/check-native-host-manifest.js" <<'JS'
@@ -1172,6 +1172,12 @@ test_chrome_plugin_staging() {
         # shellcheck disable=SC1091
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
         stage_linux_computer_use_plugin() { return 1; }
+        build_chrome_extension_host() {
+            local fake_host="$workspace/codex-chrome-extension-host"
+            printf '#!/bin/sh\n' > "$fake_host"
+            chmod +x "$fake_host"
+            printf '%s\n' "$fake_host"
+        }
         install_bundled_plugin_resources "$app_dir"
     ) >"$output_log" 2>&1
 
@@ -1192,10 +1198,38 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "brave-browser"
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "chromium"
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "defaultBrowser ==="
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" ".config/google-chrome"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxChromeUserDataDirectories"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" '"BraveSoftware","Brave-Browser"'
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" '".config","chromium"'
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await IS(o.id,t,r)"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
+}
+
+test_chrome_browser_client_profile_root_variants() {
+    info "Checking Chrome browser-client profile root variants"
+    local workspace="$TMP_DIR/chrome-browser-client-profile-roots"
+    local chrome_dir="$workspace/chrome"
+    local browser_client="$chrome_dir/scripts/browser-client.mjs"
+
+    mkdir -p "$chrome_dir/scripts"
+
+    cat > "$browser_client" <<'JS'
+import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");
+JS
+    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >/dev/null 2>&1
+    assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
+    assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
+    assert_contains "$browser_client" '".config","chromium"'
+
+    cat > "$browser_client" <<'JS'
+import{resolve as eO}from"path";import{homedir as tO,platform as rO}from"os";var Ic=eO(tO(),rO()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");
+JS
+    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >/dev/null 2>&1
+    assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
+    assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
+    assert_contains "$browser_client" '".config","chromium"'
 }
 
 test_chrome_native_host_manifest_writer() {
@@ -2464,6 +2498,7 @@ main() {
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility
     test_chrome_plugin_staging
+    test_chrome_browser_client_profile_root_variants
     test_chrome_native_host_manifest_writer
     test_launcher_template_sanity
     test_side_by_side_launcher_identity
