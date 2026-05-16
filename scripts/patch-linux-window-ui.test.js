@@ -1640,10 +1640,12 @@ function withIsolatedHome(body) {
   const previousHome = process.env.HOME;
   const previousXdg = process.env.XDG_CONFIG_HOME;
   const previousAppId = process.env.CODEX_APP_ID;
+  const previousLinuxAppId = process.env.CODEX_LINUX_APP_ID;
   const previousFlag = process.env[COMPUTER_USE_UI_ENV_VAR];
   process.env.HOME = tempHome;
   delete process.env.XDG_CONFIG_HOME;
   delete process.env.CODEX_APP_ID;
+  delete process.env.CODEX_LINUX_APP_ID;
   delete process.env[COMPUTER_USE_UI_ENV_VAR];
   try {
     return body(tempHome);
@@ -1662,6 +1664,11 @@ function withIsolatedHome(body) {
       delete process.env.CODEX_APP_ID;
     } else {
       process.env.CODEX_APP_ID = previousAppId;
+    }
+    if (previousLinuxAppId == null) {
+      delete process.env.CODEX_LINUX_APP_ID;
+    } else {
+      process.env.CODEX_LINUX_APP_ID = previousLinuxAppId;
     }
     if (previousFlag == null) {
       delete process.env[COMPUTER_USE_UI_ENV_VAR];
