@@ -41,6 +41,8 @@ pub struct ComputerUseLinux {
     last_nodes: Arc<Mutex<Vec<AccessibilityNode>>>,
     portal_pointer_session: Arc<Mutex<Option<PortalPointerSession>>>,
     portal_keyboard_session: Arc<Mutex<Option<PortalKeyboardSession>>>,
+    /// Lazily-created uinput absolute pointer (preferred coordinate backend).
+    abs_pointer: Arc<Mutex<Option<crate::abs_pointer::AbsPointer>>>,
 }
 
 #[tool_router]
@@ -259,6 +261,58 @@ impl ComputerUseLinux {
         })
     }
 
+    /// Lazily create the uinput absolute pointer, sizing its ABS range to the
+    /// logical desktop (the portal screenshot dimensions). Returns `false` if it
+    /// can't be created or is disabled via `CODEX_COMPUTER_USE_DISABLE_ABS_POINTER`.
+    async fn ensure_abs_pointer(&self) -> bool {
+        if env::var("CODEX_COMPUTER_USE_DISABLE_ABS_POINTER")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
+            return false;
+        }
+        if self
+            .abs_pointer
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        let Ok(cap) = crate::screenshot::capture_screenshot().await else {
+            return false;
+        };
+        match crate::abs_pointer::AbsPointer::create(cap.width as i32, cap.height as i32) {
+            Ok(pointer) => {
+                if let Ok(mut guard) = self.abs_pointer.lock() {
+                    *guard = Some(pointer);
+                    return true;
+                }
+                false
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Try a coordinate click through the absolute uinput pointer. `Some(ok)` if
+    /// the backend was used; `None` to fall through to portal / ydotool.
+    async fn try_abs_click(
+        &self,
+        x: i32,
+        y: i32,
+        button: Option<&str>,
+        count: u32,
+    ) -> Option<bool> {
+        if !self.ensure_abs_pointer().await {
+            return None;
+        }
+        let btn = crate::abs_pointer::PointerButton::from_name(button);
+        let mut guard = self.abs_pointer.lock().ok()?;
+        let pointer = guard.as_mut()?;
+        Some(pointer.click(x, y, btn, count).is_ok())
+    }
+
     #[tool(
         name = "click",
         description = "Click an element by index, semantic selector, or pixel coordinates from screenshot."
@@ -322,6 +376,29 @@ impl ComputerUseLinux {
         };
         let button = mouse_button_code(params.button.as_deref());
         let click_count = params.click_count.unwrap_or(1).clamp(1, 10).to_string();
+        // Preferred backend: the uinput absolute pointer. Unlike ydotool's
+        // relative-only device (faked `--absolute` via pin-to-corner + relative
+        // move, which acceleration + fractional scaling distort) and unlike the
+        // portal (per-monitor coordinate scaling + an approval dialog), the
+        // absolute pointer lands exactly at the screenshot pixel.
+        if self
+            .try_abs_click(
+                x,
+                y,
+                params.button.as_deref(),
+                params.click_count.unwrap_or(1).clamp(1, 10),
+            )
+            .await
+            == Some(true)
+        {
+            return Json(ActionOutput {
+                ok: true,
+                implemented: true,
+                action: "click".to_string(),
+                message: "Action sent through the uinput absolute pointer.".to_string(),
+                received,
+            });
+        }
         if let Some(session) = self.cached_portal_pointer_session() {
             match portal_click(
                 &session,
@@ -546,6 +623,32 @@ impl ComputerUseLinux {
     )]
     async fn drag(&self, Parameters(params): Parameters<DragParams>) -> Json<ActionOutput> {
         let received = Some(serde_json::json!(params));
+        // Preferred backend: the uinput absolute pointer (accurate landing).
+        if self.ensure_abs_pointer().await {
+            let dragged = {
+                if let Ok(mut guard) = self.abs_pointer.lock() {
+                    guard.as_mut().map(|p| {
+                        p.drag(
+                            (params.start_x, params.start_y),
+                            (params.end_x, params.end_y),
+                            crate::abs_pointer::PointerButton::Left,
+                        )
+                        .is_ok()
+                    })
+                } else {
+                    None
+                }
+            };
+            if dragged == Some(true) {
+                return Json(ActionOutput {
+                    ok: true,
+                    implemented: true,
+                    action: "drag".to_string(),
+                    message: "Action sent through the uinput absolute pointer.".to_string(),
+                    received,
+                });
+            }
+        }
         if let Some(session) = self.cached_portal_pointer_session() {
             match portal_drag(
                 &session,

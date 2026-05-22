@@ -1,3 +1,4 @@
+mod abs_pointer;
 mod atspi_tree;
 mod cosmic_helper;
 mod diagnostics;
